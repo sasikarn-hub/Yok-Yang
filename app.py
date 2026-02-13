@@ -5,15 +5,11 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 from ultralytics import YOLO
 
-# 1. โหลดโมเดล (ต้องมั่นใจว่ามีไฟล์ .pt ใน GitHub นะครับ)
-@st.cache_resource
-def load_yolo():
-    return YOLO('yolov8n-pose.pt')
-
+# --- Config ---
 try:
-    model = load_yolo()
+    model = YOLO('yolov8n-pose.pt')
 except Exception as e:
-    st.error("ไม่พบไฟล์ yolov8n-pose.pt ใน GitHub กรุณาตรวจสอบการอัปโหลดครับ")
+    st.error("ไม่พบไฟล์ yolov8n-pose.pt ใน GitHub")
     st.stop()
 
 def calculate_angle(a, b, c):
@@ -23,79 +19,124 @@ def calculate_angle(a, b, c):
     if angle > 180.0: angle = 360-angle
     return angle
 
+if 'exercise_mode' not in st.session_state:
+    st.session_state['exercise_mode'] = "Standing Bicep Curl"
+
 class FitnessProcessor(VideoTransformerBase):
     def __init__(self):
         self.counter = 0
+        self.set_count = 0
         self.stage = "down"
-        self.feedback = "READY?"
-        self.color = (0, 255, 255)
+        self.reps_per_set = 10
+        self.feedback = "READY?"  # ข้อความคำแนะนำ
+        self.color = (255, 255, 0) # สีข้อความ (เริ่มต้นสีฟ้า/เหลือง)
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
         mode = st.session_state.get('exercise_mode', "Standing Bicep Curl")
-        
         results = model(img, verbose=False, conf=0.5)
         
         try:
-            if results[0].keypoints.data.shape[1] > 0:
-                kpts = results[0].keypoints.data[0].cpu().numpy()
-                # ไหล่(6), ศอก(8), ข้อมือ(10), เอว(12)
-                p_sh, p_el, p_wr, p_hp = kpts[6][:2], kpts[8][:2], kpts[10][:2], kpts[12][:2]
-
-                if kpts[6][2] > 0.5:
-                    if mode == "Standing Bicep Curl":
-                        ang = calculate_angle(p_sh, p_el, p_wr)
-                        sway = abs(p_sh[0] - p_hp[0])
-                        if sway > 35:
-                            self.feedback, self.color = "LOCK YOUR BACK!", (0, 0, 255)
-                        else:
-                            self.feedback, self.color = "GOOD FORM", (0, 255, 0)
-                        if ang > 160: self.stage = "down"
-                        if ang < 30 and self.stage == "down" and sway <= 35:
-                            self.stage, self.counter = "up", self.counter + 1
-                    
-                    elif mode == "Standing Upright Row":
-                        if p_el[1] < p_sh[1] - 20:
-                            self.feedback, self.color = "LOWER ELBOWS!", (0, 0, 255)
-                        else:
-                            self.feedback, self.color = "NICE SQUEEZE", (0, 255, 0)
-                        if p_wr[1] > p_hp[1]: self.stage = "down"
-                        if p_wr[1] < p_sh[1] + 40 and self.stage == "down":
-                            self.stage, self.counter = "up", self.counter + 1
-
-                    elif mode == "Standing Front Raise":
-                        ang = calculate_angle(p_el, p_sh, p_hp)
-                        if ang > 95:
-                            self.feedback, self.color = "STOP AT SHOULDER!", (0, 0, 255)
-                        else:
-                            self.feedback, self.color = "CONTROLLED", (0, 255, 0)
-                        if ang < 20: self.stage = "down"
-                        if ang > 80 and self.stage == "down" and ang <= 95:
-                            self.stage, self.counter = "up", self.counter + 1
-
-                # วาด UI ลงในวิดีโอ
-                cv2.rectangle(img, (0, 0), (640, 65), self.color, -1)
-                cv2.putText(img, f"{self.feedback} | REPS: {self.counter}", (15, 45), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        except:
-            pass
+            keypoints = results[0].keypoints.data[0].cpu().numpy()
             
+            # จุดร่างกาย (ใช้ซีกขวา)
+            p_sh = keypoints[6][:2]  # ไหล่
+            p_el = keypoints[8][:2]  # ศอก
+            p_wr = keypoints[10][:2] # ข้อมือ
+            p_hip = keypoints[12][:2] # เอว
+
+            # เช็คว่าเห็นคนชัดไหม
+            if keypoints[6][2] > 0.5 and keypoints[8][2] > 0.5:
+                
+                # 1. BICEP CURL
+                if mode == "Standing Bicep Curl":
+                    angle = calculate_angle(p_sh, p_el, p_wr)
+                    sway = abs(p_sh[0] - p_hip[0])
+                    
+                    if sway > 40: 
+                        self.feedback = "LOCK YOUR BACK!"
+                        self.color = (0, 0, 255) # สีแดง
+                    elif p_el[1] < p_sh[1]: 
+                        self.feedback = "KEEP ELBOWS DOWN!"
+                        self.color = (0, 0, 255)
+                    else:
+                        self.feedback = "PERFECT FORM"
+                        self.color = (0, 255, 0) # สีเขียว
+
+                    if angle > 160: self.stage = "down"
+                    if angle < 30 and self.stage == "down":
+                        self.stage = "up"
+                        self.counter += 1
+
+                # 2. UPRIGHT ROW
+                elif mode == "Standing Upright Row":
+                    if p_el[1] < p_sh[1] - 30:  
+                        self.feedback = "LOWER YOUR ELBOWS!"
+                        self.color = (0, 0, 255)
+                    elif p_wr[0] < p_sh[0] - 50: 
+                        self.feedback = "WIDEN YOUR GRIP!"
+                        self.color = (0, 0, 255)
+                    else:
+                        self.feedback = "GOOD SQUEEZE"
+                        self.color = (0, 255, 0)
+
+                    if p_wr[1] > p_hip[1]: self.stage = "down"
+                    if p_wr[1] < p_sh[1] + 50 and self.stage == "down": 
+                        self.stage = "up"
+                        self.counter += 1
+
+                # 3. FRONT RAISE
+                elif mode == "Standing Front Raise":
+                    arm_angle = calculate_angle(p_el, p_sh, p_hip)
+                    if arm_angle > 100: 
+                        self.feedback = "STOP AT EYE LEVEL!"
+                        self.color = (0, 0, 255)
+                    elif p_sh[0] < p_hip[0] - 30: 
+                        self.feedback = "STAND STRAIGHT!"
+                        self.color = (0, 0, 255)
+                    else:
+                        self.feedback = "NICE CONTROL"
+                        self.color = (0, 255, 0)
+
+                    if arm_angle < 20: self.stage = "down"
+                    if arm_angle > 80 and arm_angle < 100 and self.stage == "down":
+                        self.stage = "up"
+                        self.counter += 1
+
+                # จัดการ Set
+                if self.counter >= self.reps_per_set:
+                    self.set_count += 1
+                    self.counter = 0
+
+                # DRAW UI
+                cv2.rectangle(img, (0, 0), (640, 60), self.color, -1)
+                cv2.putText(img, self.feedback, (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                cv2.rectangle(img, (0, 400), (200, 480), (0, 0, 0), -1)
+                cv2.putText(img, f"REPS: {self.counter}", (10, 440), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(img, f"SETS: {self.set_count}", (10, 470), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        except Exception:
+            pass
+        
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# UI ส่วนหน้าเว็บ
-st.set_page_config(page_title="Coach Krob", layout="centered")
-st.title("🏋️ Coach Krob: AI Trainer")
-option = st.selectbox('เลือกท่าออกกำลังกาย:', ('Standing Bicep Curl', 'Standing Upright Row', 'Standing Front Raise'))
+st.title("🏋️ AI Coach: Real-time Feedback")
+
+option = st.selectbox(
+    'เลือกท่าออกกำลังกาย:',
+    ('Standing Bicep Curl', 'Standing Upright Row', 'Standing Front Raise')
+)
 st.session_state['exercise_mode'] = option
 
-# เรียกใช้ระบบกล้อง
+st.write("---")
+st.write("**วิธีอ่านค่าบนหน้าจอ:**")
+st.markdown("- 🟩 **สีเขียว (PERFECT FORM):** ทำดีแล้ว ทำต่อไป!")
+st.markdown("- 🟥 **สีแดง (คำเตือน):** มีข้อผิดพลาด ให้ทำตามคำสั่งที่ขึ้นบนจอทันที")
+
 webrtc_streamer(
-    key="coach-krob-final",
+    key="fitness-coach",
     video_processor_factory=FitnessProcessor,
-    rtc_configuration={
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-    },
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    media_stream_constraints={"video": True, "audio": False}
 )

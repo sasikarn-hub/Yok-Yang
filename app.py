@@ -5,11 +5,15 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 from ultralytics import YOLO
 
-# 1. Load Model
+# 1. โหลดโมเดล (ต้องมั่นใจว่ามีไฟล์ .pt ใน GitHub นะครับ)
+@st.cache_resource
+def load_yolo():
+    return YOLO('yolov8n-pose.pt')
+
 try:
-    model = YOLO('yolov8n-pose.pt')
-except Exception:
-    st.error("ไม่พบไฟล์ yolov8n-pose.pt กรุณาอัปโหลดลง GitHub ด้วยครับ")
+    model = load_yolo()
+except Exception as e:
+    st.error("ไม่พบไฟล์ yolov8n-pose.pt ใน GitHub กรุณาตรวจสอบการอัปโหลดครับ")
     st.stop()
 
 def calculate_angle(a, b, c):
@@ -70,21 +74,28 @@ class FitnessProcessor(VideoTransformerBase):
                         if ang > 80 and self.stage == "down" and ang <= 95:
                             self.stage, self.counter = "up", self.counter + 1
 
-                # วาด UI
-                cv2.rectangle(img, (0, 0), (640, 60), self.color, -1)
-                cv2.putText(img, f"{self.feedback} REPS: {self.counter}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        except: pass
+                # วาด UI ลงในวิดีโอ
+                cv2.rectangle(img, (0, 0), (640, 65), self.color, -1)
+                cv2.putText(img, f"{self.feedback} | REPS: {self.counter}", (15, 45), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        except:
+            pass
+            
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
+# UI ส่วนหน้าเว็บ
 st.set_page_config(page_title="Coach Krob", layout="centered")
 st.title("🏋️ Coach Krob: AI Trainer")
 option = st.selectbox('เลือกท่าออกกำลังกาย:', ('Standing Bicep Curl', 'Standing Upright Row', 'Standing Front Raise'))
 st.session_state['exercise_mode'] = option
 
+# เรียกใช้ระบบกล้อง
 webrtc_streamer(
-    key="coach-krob-v1",
+    key="coach-krob-final",
     video_processor_factory=FitnessProcessor,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    },
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
